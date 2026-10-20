@@ -5,13 +5,19 @@ export default function useDesksState() {
   const [loadingDesks, setLoadingDesks] = useState([])
   const [installedDesks, setInstalledDesks] = useState([])
 
-  useEffect(() => {
-    async function getInstalledDesks() {
-      const initial = await scryCharges()
-      setInstalledDesks(Object.keys(initial))
-    }
+  async function refreshDesks() {
+    const initial = await scryCharges()
+    setInstalledDesks(Object.keys(initial))
+    // installs that finished while we weren't listening
+    setLoadingDesks(prevDesks => {
+      return prevDesks.filter(loadingDesk => {
+        return initial[loadingDesk] && 'install' in initial[loadingDesk].chad
+      })
+    })
+  }
 
-    getInstalledDesks()
+  useEffect(() => {
+    refreshDesks()
   }, [])
 
   useEffect(() => {
@@ -82,5 +88,5 @@ export default function useDesksState() {
     // }
   }
 
-  return {installedDesks, loadingDesks, receiveDesksUpdate}
+  return {installedDesks, loadingDesks, receiveDesksUpdate, refreshDesks}
 }

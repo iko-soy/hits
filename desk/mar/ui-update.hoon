@@ -1,4 +1,16 @@
 /-  *hits
+::  +show-website: a docket's website, if the frontend may link to it
+::
+::    eyre renders our facts without virtualizing, and +de-purl takes
+::    long to parse a long cord
+::
+=>  |%
+    ++  show-website
+      |=  website=cord
+      ^-  cord
+      ?:  (gth (met 3 website) 256)  ''
+      ?~((de-purl:html website) '' website)
+    --
 |_  upd=ui-update
 ++  grab
   |%
@@ -14,7 +26,7 @@
       :~  ['updateTag' [%s 'score-update']]
           ['ship' [%s (scot %p ship.app.upd)]]
           ['desk' [%s (scot %tas desk.app.upd)]]
-          ['score' [%n (scot %ud score.upd)]]
+          ['score' (numb:enjs:format score.upd)]
       ==
     ::
         %version-update
@@ -22,7 +34,7 @@
       :~  ['updateTag' [%s 'version-update']]
           ['ship' [%s (scot %p ship.app.upd)]]
           ['desk' [%s (scot %tas desk.app.upd)]]
-          ['version' [%n (scot %ud kelvin.upd)]]
+          ['version' (numb:enjs:format kelvin.upd)]
       ==
     ::
         %installs-update
@@ -32,9 +44,14 @@
           ['desk' [%s (scot %tas desk.app.upd)]]
           :-  'installs'
           :-  %a
+          ::  the frontend only looks at the 25 most recent
+          ::
           %+  turn
-            installs.upd
-          |=(=time (time:enjs:format time))
+            (scag 25 installs.upd)
+          ::  +time:enjs crashes on times before 1970, and eyre doesn't
+          ::  virtualize mark conversion
+          ::
+          |=(=time (time:enjs:format (max ~1970.1.1 time)))
       ==
     ::
         %docket-update
@@ -49,7 +66,7 @@
               ['info' [%s info]]
               ['color' [%s (scot %ux color)]]
               ['image' [%s ?~(image '' (need image))]]
-              ['website' [%s ?~((de-purl:html website) '' website)]]
+              ['website' [%s (show-website website)]]
               ['license' [%s license]]
               :-  'version'
               :-  %s
@@ -94,9 +111,9 @@
           :-  'installs'
           :-  %a
           %+  turn
-            installs.upd
+            (scag 25 installs.upd)
           |=  =time
-          (time:enjs:format time)
+          (time:enjs:format (max ~1970.1.1 time))
           =,  docket.upd
           :-  'docket'
           %-  pairs:enjs:format
@@ -104,7 +121,7 @@
               ['info' [%s info]]
               ['color' [%s (scot %ux color)]]
               ['image' [%s ?~(image '' (need image))]]
-              ['website' [%s ?~((de-purl:html website) '' website)]]
+              ['website' [%s (show-website website)]]
               ['license' [%s license]]
               :-  'version'
               :-  %s

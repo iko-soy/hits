@@ -1,9 +1,11 @@
-::  gossip: data sharing with pals
+::  gossip: data sharing with pals (and pals of pals, etc)
 ::
-::      v1.1.0: sneaky whisper
+::      v1.1.1+extras: sneaky whisper
+::      (upstream v1.1.1, plus the extra peers added for %hits)
 ::
 ::    automates using /app/pals for peer & content discovery,
 ::    letting the underlying agent focus on handling the data.
+::    the underlying agent may supply additional ("extra") peers.
 ::
 ::      usage
 ::
@@ -15,10 +17,10 @@
 ::    a /~/gossip wire.
 ::    the mark convertors ensure that this library can reconstitute the
 ::    appropriate vases from the (cask *)s it sends around internally.
-::    if a mark conversion for a received datum isn't available, then
-::    the library will inject a %fact with a %gossip-unknown mark instead,
-::    containing a (cask *). the agent may either store it for later use,
-::    or handle it directly.
+::    if a mark conversion for a received datum isn't available, or it
+::    fails on the datum, then the library will inject a %fact with a
+::    %gossip-unknown mark instead, containing a (cask *). the agent may
+::    either store it for later use, or handle it directly.
 ::
 ::    for new incoming subscriptions, the underlying agent's +on-watch is
 ::    called, with /~/gossip/source, so that it may give initial results.
@@ -44,6 +46,19 @@
 ::    proxied through a random "tell" peer. note that the proxy will have
 ::    a 50% chance of proxying in turn. for low amounts of hops, data could
 ::    escape the local social graph entirely.
+::
+::    to also gossip with ships that aren't (necessarily) pals, emit a %fact
+::    with the %gossip-extras mark on the /~/gossip/extras path, containing
+::    the full (set ship) of extra peers. the +acquaint helper can be used to
+::    do this. every such fact replaces the previous set, and ourselves and
+::    atoms too wide to be ships are never included. give at most one such
+::    fact per event: changes are worked out against the watches in the
+::    bowl, which don't include those made earlier in the same event.
+::    for every .hear and .tell mode, extras are treated as
+::    if they were mutual pals: we subscribe to them, let them subscribe to
+::    us, accept relay pokes from them, and may relay through them. pals
+::    effects never cause us to drop an extra.
+::    the +read-extras helper scries out the current set.
 ::
 ::    (we introduce the /~/etc path prefix convention to indicate paths
 ::     that are for library-specific use only.
@@ -102,12 +117,20 @@
 ::      - 50% chance to redirect into the "pass flow" (see below)
 ::      - wrap them as %gossip-rumor to send them out on /~/gossip/gossip
 ::    - for new pals matching the hear mode, we watch their /~/gossip/gossip
-::    - for gone pals, we leave that watch
+::    - for gone pals, we leave that watch, unless they're extras
+::    - for facts produced on /~/gossip/extras, we
+::      - store the set, minus ourselves and non-ships, replacing the
+::        previous one
+::      - watch the /~/gossip/gossip of new extras, like for new pals
+::      - for gone extras, leave that watch unless still heard through pals,
+::        and kick them if they're no longer allowed by the tell mode
 ::    - for facts on those watches
 ::      - ensure they're %gossip-rumors, ignoring otherwise
 ::      - unwrap them and +on-agent /~/gossip/gossip into the inner agent, and
 ::      - re-emit them as facts on /~/gossip/gossip if there are hops left
 ::    - for nacks on those watches, we retry after ~m30
+::    - on load, we watch any extras we aren't watching, in case a retry
+::      timer fired while we were suspended
 ::
 ::    - other gossip instances may poke us with rumors directly
 ::    - the inner agent learns the rumor normally, as if it came from a fact
@@ -135,14 +158,14 @@
   $?  %anybody  ::  any ship discoverable through pals
       %targets  ::  any ship we've added as a pal
       %mutuals  ::  any mutual pal
-  ==
+  ==            ::  (each also includes the extras, see +acquaint)
 ::
 +$  config
   $:  hops=_1    ::  how far away gossip may travel
                  ::  (1 hop is pals only, 0 stops exposing data at all)
       hear=whos  ::  who to subscribe to
       tell=whos  ::  who to allow subscriptions from
-      pass=?     ::  whether to (50/50) emit through proxy
+      pass=?     ::  whether to (50/50) emit data through proxy
   ==
 ::
 ++  pass-timeout  ~s30
@@ -162,6 +185,16 @@
   ^-  config
   .^(config %gx /(scot %p our)/[dap]/(scot %da now)/~/gossip/config/noun)
 ::
+++  acquaint  ::  replace the set of extra peers (once per event at most)
+  |=  extras=(set ship)
+  ^-  card:agent:gall
+  [%give %fact [/~/gossip/extras]~ %gossip-extras !>(extras)]
+::
+++  read-extras
+  |=  bowl:gall
+  ^-  (set ship)
+  .^((set ship) %gx /(scot %p our)/[dap]/(scot %da now)/~/gossip/extras/noun)
+::
 ++  agent
   |=  $:  init=config
           grab=(map mark $-(* vase))
@@ -169,29 +202,36 @@
   ^-  $-(agent:gall agent:gall)
   |^  agent
   ::
-  +$  state-1
-    $:  %1
+  +$  state-4
+    $:  %4
         manner=config                  ::  latest config
+        extras=(set ship)              ::  extra peers (from inner agent)
         memory=(set hash)              ::  datums seen (by inner agent)
         shared=(set hash)              ::  datums shared (as fact)
         passed=(map hash [rumor @da])  ::  pending relays & timeouts
+        misses=(set ship)              ::  ships that won't relay
         future=(list rumor)            ::  rumors of unknown kinds
     ==
   ::
   +$  card  card:agent:gall
   ::
   ++  helper
-    |_  [=bowl:gall state-1]
+    |_  [=bowl:gall state-4]
     +*  state  +<+
         pals   ~(. lp bowl)
     ++  en-cage
       |=  =(cask *)
       ^-  cage
-      ?^  to=(~(get by grab) p.cask)
-        ::TODO  +soft or otherwise virtualize? don't want to risk crashes, right?
-        [p.cask (u.to q.cask)]
-      ~&  [gossip+dap.bowl %no-mark p.cask]
-      [%gossip-unknown !>(cask)]
+      ?~  to=(~(get by grab) p.cask)
+        ~&  [gossip+dap.bowl %no-mark p.cask]
+        [%gossip-unknown !>(cask)]
+      ::  anyone can send us any noun, and a crash here would lose us the
+      ::  subscription it came in on
+      ::
+      ?~  vax=(mole |.((u.to q.cask)))
+        ~&  [gossip+dap.bowl %bad-noun p.cask]
+        [%gossip-unknown !>(cask)]
+      [p.cask u.vax]
     ::
     ++  de-cage
       |=(cage `(cask *)`[p q.q])
@@ -237,6 +277,19 @@
           (tell-changed tell.old)
           caz
         ==
+      ?:  =(/~/gossip/extras path)
+        ~|  [%weird-fact-on-extras p.cage.p.card]
+        ?>  =(%gossip-extras p.cage.p.card)
+        =/  old=(set ship)  extras
+        =.  extras
+          %-  silt
+          %+  skip  ~(tap in !<((set ship) q.cage.p.card))
+          |=  s=ship
+          ::  ames crashes the whole event on a "ship" wider than 128 bits
+          ::
+          |(=(s our.bowl) (gth (met 3 s) 16))
+        :_  state
+        (weld (extras-changed old) caz)
       ~|  [%strange-internal-target path]
       ?>  =(/~/gossip/source path)
       ::  if hops is configured at 0, we don't broadcast at all.
@@ -269,15 +322,23 @@
       ::  if we're proxying, but there's no reasonable targets, send as fact
       ::
       =/  aides=(set ship)
-        ::  reasonable targets do not include ourselves, or whoever
-        ::  caused us to want to (re)send this rumor
+        ::  reasonable targets do not include ourselves, whoever
+        ::  caused us to want to (re)send this rumor, or ships that failed
+        ::  to proxy for us before.
+        ::  that last one is important because we need to avoid the mistake of
+        ::  occasionally sending them pokes that just linger in our outbound
+        ::  ames flows and keep retrying. (ideally we'd do those all pokes for
+        ::  a target on the same flow, but we really like storing information
+        ::  in the wire and don't want to do per-relay queues in state. we also
+        ::  don't particularly care about ordering guarantees for gossip.)
+        ::  we don't just get the set of ships with active incoming or outgoing
+        ::  subscriptions, because that constrains the set unnecessarily. for
+        ::  some configs, ships in .tell (that aren't in .hear) might be
+        ::  running the agent without actively listening to us.
+        ::  (extras are always in .tell, see +whom.)
         ::
-        =-  (~(del in (~(del in -) our.bowl)) src.bowl)
-        ?-  tell.manner
-          %anybody  (~(uni in (targets:pals ~.)) leeches:pals)
-          %targets  (targets:pals ~.)
-          %mutuals  (mutuals:pals ~.)
-        ==
+        =-  (~(dif in (~(del in (~(del in -) our.bowl)) src.bowl)) misses)
+        (whom tell.manner)
       =/  count=@ud  ~(wyt in aides)
       ?:  =(0 count)
         fact
@@ -287,7 +348,7 @@
       =/  =time       (add now.bowl pass-timeout)
       =.  passed      (~(put by passed) hash [rumor time])
       :_  state
-      =/  =wire  /~/gossip/passed/(scot %uv hash)
+      =/  =wire  /~/gossip/passed/(scot %p proxy)/(scot %uv hash)
       =/  =cage  gossip-rumor+!>(rumor)
       :~  [%pass wire %agent [proxy dap.bowl] %poke cage]
           [%pass wire %arvo %b %wait time]
@@ -323,7 +384,10 @@
       ^-  (quip card _state)
       =/  =hash  (en-hash rumor)
       ?:  (~(has in shared) hash)  [~ state]
-      ?>  =(%0 kind.rumor)  ::NOTE  should have been checked for already
+      ::  a rumor of a kind we don't know, whose data we've seen in one
+      ::  we did know
+      ::
+      ?.  =(%0 kind.rumor)  [~ state]
       ?~  meta=((soft ,hops=@ud) meta.rumor)  [~ state]
       =*  hops  hops.u.meta
       ?:  =(0 hops)  [~ state]
@@ -331,13 +395,20 @@
       :-  [%give %fact [/~/gossip/gossip]~ %gossip-rumor !>(rumor)]~
       state(shared (~(put in shared) (en-hash rumor)))
     ::
+    ++  whom  ::  ships in the .whos set, according to pals, plus extras
+      |=  =whos
+      ^-  (set ship)
+      %-  ~(uni in extras)
+      ?-  whos
+        %anybody  (~(uni in leeches:pals) (targets:pals ~.))
+        %targets  (targets:pals ~.)
+        %mutuals  (mutuals:pals ~.)
+      ==
+    ::
     ++  may-watch
       |=  who=ship
-      ?-  tell.manner
-        %anybody  &
-        %targets  (~(has in (targets:pals ~.)) who)
-        %mutuals  (~(has in (mutuals:pals ~.)) who)
-      ==
+      ?:  ?=(%anybody tell.manner)  &
+      (~(has in (whom tell.manner)) who)
     ::
     ::
     ++  watch-pals
@@ -353,12 +424,7 @@
       [/~/gossip/gossip/(scot %p s) s dap.bowl]
     ::
     ++  want-target
-      %~  has  in
-      ?-  hear.manner
-        %anybody  (~(uni in leeches:pals) (targets:pals ~.))
-        %targets  (targets:pals ~.)
-        %mutuals  (mutuals:pals ~.)
-      ==
+      ~(has in (whom hear.manner))
     ::
     ++  retry-timer
       |=  [t=@dr p=path]
@@ -373,6 +439,10 @@
       :_  ~
       :+  %pass  /~/gossip/gossip/(scot %p s)
       [%agent [s dap.bowl] %watch /~/gossip/gossip]
+    ::
+    ++  watch-hear  ::  watch those we hear from that we aren't watching
+      ^-  (list card)
+      (zing (turn ~(tap in (whom hear.manner)) watch-target))
     ::
     ++  leave-target
       |=  s=ship
@@ -390,12 +460,7 @@
       ^-  (list card)
       =*  new  hear.manner
       ?:  =(old new)  ~
-      =/  listen=(set ship)
-        ?-  new
-          %anybody  (~(uni in leeches:pals) (targets:pals ~.))
-          %targets  (targets:pals ~.)
-          %mutuals  (mutuals:pals ~.)
-        ==
+      =/  listen=(set ship)  (whom new)
       =/  hearing=(set ship)
         %-  ~(gas in *(set ship))
         %+  murn  ~(tap by wex.bowl)
@@ -424,12 +489,7 @@
           [* ?(%targets %mutuals)]
         ::  perms got tighter, we need to kick stragglers
         ::
-        =/  allowed=(set ship)
-          ?-  new
-            %anybody  !!
-            %targets  (targets:pals ~.)
-            %mutuals  (mutuals:pals ~.)
-          ==
+        =/  allowed=(set ship)  (whom new)
         %+  murn  ~(val by sup.bowl)
         |=  [s=ship p=path]
         ^-  (unit card)
@@ -439,11 +499,47 @@
             !(~(has in allowed) s)
         ==
       ==
+    ::
+    ++  extras-changed
+      |=  old=(set ship)
+      ^-  (list card)
+      =*  new  extras
+      ?:  =(old new)  ~
+      =/  gone=(list ship)  ~(tap in (~(dif in old) new))
+      ;:  weld
+        ::  stop listening to ex-extras we don't otherwise want to hear.
+        ::  (if a watch is pending a retry, the %wake logic notices instead.)
+        ::
+        ^-  (list card)
+        =/  listen=(set ship)  (whom hear.manner)
+        %+  murn  gone
+        |=  s=ship
+        ^-  (unit card)
+        ?:  (~(has in listen) s)  ~
+        ?.  (watching-target s)   ~
+        `(leave-target s)
+      ::
+        ::  stop letting ex-extras listen to us, if the tell mode says so
+        ::
+        ^-  (list card)
+        ?:  ?=(%anybody tell.manner)  ~
+        =/  allowed=(set ship)  (whom tell.manner)
+        %+  murn  gone
+        |=  s=ship
+        ^-  (unit card)
+        ?:  (~(has in allowed) s)  ~
+        `(kick-target s)
+      ::
+        ::  start listening to new extras (no-op if we already were)
+        ::
+        ^-  (list card)
+        (zing (turn ~(tap in (~(dif in new) old)) watch-target))
+      ==
     --
   ::
   ++  agent
     |=  inner=agent:gall
-    =|  state-1
+    =|  state-4
     =*  state  -
     %+  verb  |
     %-  agent:dbug
@@ -461,7 +557,7 @@
       =^  cards   state  (play-cards:up cards)
       [(weld watch-pals:up cards) this]
     ::
-    ++  on-save  !>([[%gossip state] on-save:og])
+    ++  on-save  (slop !>([%gossip state]) on-save:og)
     ++  on-load
       |=  ole=vase
       ^-  (quip card _this)
@@ -471,16 +567,66 @@
         =^  cards   state  (play-cards:up cards)
         [(weld watch-pals:up cards) this]
       ::
-      |^  =+  !<([[%gossip old=state-any] ile=vase] ole)
+      |^  =+  !<([%gossip old=state-any] (slot 2 ole))
+          =/  ile=vase                   (slot 3 ole)
           =?  old  ?=(%0 -.old)  (state-0-to-1 old)
-          ?>  ?=(%1 -.old)
+          =?  old  ?=(%1 -.old)  (state-1-to-2 old)
+          ::  before version 3, we stored the inner +on-save vase inside
+          ::  our own +on-save vase. undoing this double-vasing coincided
+          ::  with the h135 type-of-type upgrade.
+          ::
+          =?  ile  ?=(%2 -.old)  (next-vase:h136 !<(vase:h136 ile))
+          =?  old  ?=(%2 -.old)  (state-2-to-3 old)
+          =?  old  ?=(%3 -.old)  (state-3-to-4 old)
+          ?>  ?=(%4 -.old)
           =.  state  old
           =^  cards  inner  (on-load:og ile)
           =^  cards  state  (play-cards:up cards)
+          ::  gall drops timers that fire while we're suspended, which may
+          ::  have been retries of watches on targets
+          ::
           ::TODO  for later versions, add :future retry logic as needed
-          [cards this]
+          [(weld watch-hear:up cards) this]
       ::
-      +$  state-any  $%(state-0 state-1)
+      +$  state-any  $%(state-0 state-1 state-2 state-3 state-4)
+      ::
+      +$  state-3
+        $:  %3
+            manner=config
+            memory=(set hash)
+            shared=(set hash)
+            passed=(map hash [rumor @da])
+            misses=(set ship)
+            future=(list rumor)
+        ==
+      ++  state-3-to-4
+        |=  state-3
+        ^-  state-4
+        [%4 manner ~ memory shared passed misses future]
+      ::
+      +$  state-2
+        $:  %2
+            manner=config
+            memory=(set hash)
+            shared=(set hash)
+            passed=(map hash [rumor @da])
+            misses=(set ship)
+            future=(list rumor)
+        ==
+      ++  state-2-to-3
+        |=(s=state-2 s(- %3))
+      ::
+      +$  state-1
+        $:  %1
+            manner=config
+            memory=(set hash)
+            shared=(set hash)
+            passed=(map hash [rumor @da])
+            future=(list rumor)
+        ==
+      ++  state-1-to-2
+        |=  state-1
+        [%2 manner memory shared passed ~ future]
       ::
       +$  state-0    [%0 manner=config-0 memory=(set hash) future=(list rumor)]
       +$  config-0   [hops=_1 hear=whos tell=whos]
@@ -519,8 +665,13 @@
         [cards this]
       ?.  (want-target:up src.bowl)
         ~|(%gossip-rejected !!)
-      =+  !<(=rumor vase)
+      ::  we're getting pokes from them, so we should try relaying through
+      ::  them again if we stopped doing so
+      ::NOTE  this only ever cleans out .misses for ships producing content
+      ::
+      =.  misses  (~(del in misses) src.bowl)
       ::TODO  dedupe with +on-agent %fact
+      =+  !<(=rumor vase)
       =/  =hash  (en-hash:up rumor)
       ?:  (~(has in memory) hash)
         [~ this]
@@ -553,6 +704,11 @@
           ?.  =(%gossip-rumor mark)
             ~&  [gossip+dap.bowl %ignoring-unexpected-fact mark=mark]
             [~ this]
+          ::  we're getting facts from them, so we should try relaying through
+          ::  them again if we stopped doing so
+          ::NOTE  this only ever cleans out .misses for ships in .hear
+          ::
+          =.  misses  (~(del in misses) src.bowl)
           ::TODO  de-dupe with +on-poke
           =+  !<(=rumor vase)
           =/  =hash  (en-hash:up rumor)
@@ -595,12 +751,22 @@
           [~ this]
         ==
       ::
-          [%passed @ ~]
+          [%passed ?([@ ~] [@ @ ~])]
         ?.  ?=(%poke-ack -.sign)
           ~&  [gossip+dap.bowl %unexpected-sign wire -.sign]
           [~ this]
         ~|  t.t.wire
-        =/  =hash  (slav %uv i.t.t.t.wire)
+        ::  regardless of anything else: if they acked the poke, they are
+        ::  accepting of relay requests, if they nacked they're unaccepting
+        ::
+        =.  misses
+          ?:  ?=(~ p.sign)
+            (~(del in misses) src.bowl)
+          (~(put in misses) src.bowl)
+        =/  =hash
+          ?:  ?=([@ ~] t.t.t.wire)
+            (slav %uv i.t.t.t.wire)
+          (slav %uv i.t.t.t.t.wire)
         ?~  rum=(~(get by passed) hash)
           [~ this]
         ::NOTE  emitting rest is cute, but doesn't actually work reliably,
@@ -643,6 +809,9 @@
             ==
           ::
               %part
+            ::  extras stay heard and told regardless of pals
+            ::
+            ?:  (~(has in extras) ship)  ~
             %+  weld
               ?-  tell.manner
                 %anybody  ~
@@ -663,6 +832,7 @@
             ==
           ::
               %away
+            ?:  (~(has in extras) ship)  ~
             %+  weld
               ?-  tell.manner
                 %anybody  ~
@@ -696,6 +866,7 @@
       ?.  ?=(%x i.path)  [~ ~]
       ?+  t.t.t.path  [~ ~]
         [%config ~]  ``noun+!>(manner)
+        [%extras ~]  ``noun+!>(extras)
       ==
     ::
     ++  on-leave
@@ -715,10 +886,23 @@
         =^  cards  state  (play-cards:up cards)
         [cards this]
       ?+  t.t.wire  ~|(wire !!)
-          [%passed @ ~]
-        =/  =hash  (slav %uv i.t.t.t.wire)
+          [%passed ?([@ ~] [@ @ ~])]
+        =/  =hash
+          ?:  ?=([@ ~] t.t.t.wire)
+            (slav %uv i.t.t.t.wire)
+          (slav %uv i.t.t.t.t.wire)
         ?~  rum=(~(get by passed) hash)  [~ this]
+        ::  since timer cancellation isn't fully reliable, this timer fire
+        ::  might be from a relay that nacked our poke. if the timer fired
+        ::  earlier than expected, assume that to be the case and no-op.
+        ::
         ?:  (gth +.u.rum now.bowl)       [~ this]
+        ::  they failed to respond to our relay request in time, mark them as
+        ::  unaccepting (if we know who they are from a the new-style wire)
+        ::  and try sending the rumor again
+        ::
+        =?  misses  ?=([@ @ ~] t.t.t.wire)
+          (~(put in misses) (slav %p i.t.t.t.wire))
         =^  cards  state  (emit-rumor:up -.u.rum)
         [cards this]
       ::

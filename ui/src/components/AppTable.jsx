@@ -3,20 +3,21 @@ import AppButton from './AppButton.jsx';
 
 function normalizeAppColor(color) {
   if (!color) {
-    return '$FACDB9'
+    return '#FACDB9'
   }
 
   if (color === '0x0') {
     return '#FACDB9'
   }
 
-  let hexColor = `#${color.slice(2).replace('.', '').toUpperCase()}`;
+  // the agent sends @ux: dot-separated, without leading zeros
+  const digits = color.slice(2).replaceAll('.', '')
 
-  if (hexColor.length !== 7) {
+  if (digits.length > 6) {
     return '#FACDB9'
   }
 
-  return hexColor
+  return `#${digits.padStart(6, '0').toUpperCase()}`
 }
 
 function normalizeAppDescription(info) {
@@ -24,7 +25,15 @@ function normalizeAppDescription(info) {
     return ''
   }
 
-  let newDesc = `${info[0].toUpperCase()}${info.substring(1)}`
+  // we show at most two sentences, and the matches below take time
+  // quadratic in the length of a line
+  let shortInfo = info.slice(0, 500)
+  // without half of a character
+  if (info.length > 500 && /[\uD800-\uDBFF]$/.test(shortInfo)) {
+    shortInfo = shortInfo.slice(0, -1)
+  }
+
+  let newDesc = `${shortInfo[0].toUpperCase()}${shortInfo.substring(1)}`
 
   if (
     !newDesc.endsWith('.') &&
@@ -81,11 +90,17 @@ function normalizeIconPath(path) {
     return ''
   }
 
-  if (!path.startsWith('http')) {
-    return ''
+  // only show icons served by our own ship or inlined in the docket
+  if (path.startsWith('data:image/')) {
+    return path
   }
 
-  return path
+  try {
+    const url = new URL(path, window.location.origin)
+    return url.origin === window.location.origin ? url.href : ''
+  } catch (e) {
+    return ''
+  }
 }
 
 function normalizeLicense(license) {
@@ -194,8 +209,10 @@ export default function AppTable({ apps, loadingDesks, installedDesks }) {
               >
                 {normalizeIconPath(app.docket.image) &&
                 <img
+                key={normalizeIconPath(app.docket.image)}
                 src={normalizeIconPath(app.docket.image)}
                 alt={`${app.docket.title} app icon`}
+                onError={e => { e.currentTarget.style.display = 'none' }}
                 />
                 }
               </td>

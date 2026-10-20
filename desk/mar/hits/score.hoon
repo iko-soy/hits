@@ -2,7 +2,7 @@
 |_  app-score=(unit score)
 ++  grab
   |%
-  ++  noun  app-score=(unit score)
+  ++  noun  (unit score)
   --
 ++  grow
   |%

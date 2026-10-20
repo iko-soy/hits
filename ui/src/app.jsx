@@ -14,20 +14,28 @@ export function App() {
   const {
     allTimeRankings,
     receiveUiUpdate,
+    resetApps,
     trendingApps
   } = useHitsState()
   const {
     loadingDesks,
     installedDesks,
-    receiveDesksUpdate
+    receiveDesksUpdate,
+    refreshDesks
   } = useDesksState()
 
   const todaysDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
 
   useEffect(() => {
     async function init() {
-      await subscribeToCharges(chargesUpdate => receiveDesksUpdate(chargesUpdate))
-      await subscribeToUiUpdates(uiUpdate => receiveUiUpdate(uiUpdate))
+      await subscribeToCharges(
+        chargesUpdate => receiveDesksUpdate(chargesUpdate),
+        refreshDesks
+      )
+      await subscribeToUiUpdates(
+        uiUpdate => receiveUiUpdate(uiUpdate),
+        resetApps
+      )
     }
 
     init()
@@ -81,7 +89,7 @@ export function App() {
         <img ref={helpIconRef} className='help-icon' src={helpIcon} alt="help icon" onClick={() => setIsHelpVisible(!isHelpVisible)} />
         <div ref={helpWindowRef} className={`help-window ${isHelpVisible ? 'visible' : ''}`}>
           <p>App rankings are compiled from a local sample of installs among your neighbors.</p>
-          <p>That sample includes everyone you've added as a pal in the <a className='link-text' onClick={handlePalsLinkClick}>Pals</a> app, and everyone they've added as a pal. These aren't definitive rankings among the whole urbit network.</p>
+          <p>That sample includes everyone you've added as a pal in the <a className='link-text' onClick={handlePalsLinkClick}>Pals</a> app or chat with in DMs and group DMs, and everyone they've added as a pal or chat with. These aren't definitive rankings among the whole urbit network.</p>
           <p>Trending apps are determined by the frequency of installs your Hits app knows about.</p>
         </div>
       </div>

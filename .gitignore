@@ -1,3 +1,9 @@
 ui/node_modules
 ui/dist
 ui/.env.*
+result
+
+# local tlon-skill install
+/node_modules
+/package.json
+/package-lock.json

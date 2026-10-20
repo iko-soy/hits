@@ -1,22 +1,24 @@
 /-  *hits
 =,  format
-|_  update=(list app score)
+|_  update=(list [app score])
 ++  grab
   |%
-  ++  noun  (list app score)
+  ++  noun  (list ,[app score])
   --
 ++  grow
   |%
   ++  noun  update
   ++  json
-    :- 'scores'
+    %-  frond:enjs
+    :-  'scores'
+    :-  %a
     %+  turn
       update
     |=  [[=ship =desk] =score]
     %-  pairs:enjs
     :~  ['app' [%s (scot %tas desk)]]
         ['source' [%s (scot %p ship)]]
-        ['score' [%n score]]
+        ['score' (numb:enjs score)]
     ==
   --
 ++  grad  %noun
