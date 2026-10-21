@@ -20,6 +20,16 @@ assembled on your own ship from the ships you already talk to.
   and with the ships you chat with in Tlon (direct messages and small group
   DMs), and relays hits a couple of hops further, so the sample grows with
   your social graph rather than the whole network.
+- **Pals is optional.** Hits checks whether `%pals` is running before each
+  read, and its watches on `%pals` simply wait until it starts. Without Pals,
+  you hear only from the ships you chat with in Tlon. To get Pals:
+  `|install ~paldev %pals`.
+- **What counts as an install.** Hits counts an app only while kiln syncs it
+  from another ship. Apps installed from a file (for example with deskjam)
+  and desks made with `|new-desk` have no sync source, so they are never
+  counted. Pausing a desk's sync (`|pause`, which is what deskjam's "stop
+  kiln syncing" does) makes Hits treat the app as uninstalled, and it
+  gossips an uninstall.
 - **Counting.** A hit is `[time app kelvin installed]`. The `time` identifies
   one install, so the same install is counted once no matter how many times
   it is re-sent. An app's score is its number of distinct installs.
@@ -120,6 +130,12 @@ npm run build
    ```
    |public %hits
    ```
+
+On a ship other than `~donmec-sallud`, installing Hits from a file (for
+example with deskjam) leaves it without a frontend: the docket's
+`glob-ames+[~donmec-sallud 0v0]` is a placeholder. That ship can serve its
+own copy by clicking **set** in deskjam's glob box, then uploading the built
+`ui/dist` at `/docket/upload`.
 
 ## License
 
