@@ -116,6 +116,13 @@ npm run build
 
 ## Installing on a ship
 
+To install Hits, run `|install ~donmec-sallud %hits` in your ship's
+dojo. Your ship gets Hits, frontend included, and its updates from that
+ship. [shelf.iko.soy](https://shelf.iko.soy) lists all the apps
+`~donmec-sallud` offers.
+
+To build Hits and publish it from `~donmec-sallud`:
+
 1. Build the desk and the glob as above.
 2. Mount and replace `%hits` with the built desk. Vere cannot delete files in
    a mount, so swap in a *writable* copy, then commit:
